@@ -13,7 +13,7 @@ pydantic
 
 The changelog:
 
-- added capability to diffuse noise (as well as denoise) to an arbitrary level
+- added capability to diffuse noise (and denoise) to (from) an arbitrary level
 - support resuming training from the saved checkpoint 
 - added a dataloader and preprocessing pipeline 
-- added saving options for training history and generated images
+- added saving options for training history and the generated images
