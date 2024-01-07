@@ -7,7 +7,8 @@ requirements:
 tensorflow	     
 matplotlib 
 jupyter
-numpy  
+numpy
+pydantic  
 ```
 
 The changelog:
