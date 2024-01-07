@@ -9,12 +9,12 @@ class ModelParams(BaseModel):
     plot_diffusion_steps: Optional[int] = 10 #diffusion steps, also the denoise steps for prediction
 
     # scheduler parameters
-    min_signal_rate: float = 0.02
-    max_signal_rate: float = 0.95
+    min_signal_rate: Optional[float] = 0.02
+    max_signal_rate: Optional[float] = 0.95
 
     # block parameters
-    widths: List[int] = [32, 64, 96, 128]
-    block_depth: int = 2
+    widths: Optional[List[int]] = [32, 64, 96, 128]
+    block_depth: Optional[int] = 2
 
     # optimization
     image_size: int = 128
