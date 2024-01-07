@@ -6,7 +6,7 @@ from keras import layers
 import numpy as np
 import matplotlib.pyplot as plt
 
-
+# Adapted from https://keras.io/examples/generative/ddim/
 
 class KID(keras.metrics.Metric):
     def __init__(self, name, params, **kwargs):
