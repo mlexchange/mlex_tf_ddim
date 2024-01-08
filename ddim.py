@@ -20,7 +20,7 @@ class KID(keras.metrics.Metric):
         # preprocessing as during pretraining
         self.encoder = keras.Sequential(
             [
-                keras.Input(shape=(self.params.image_size, self.params.image_size, 3)),
+                keras.Input(shape=(self.params.image_size[0], self.params.image_size[1], 3)),
                 layers.Rescaling(255.0),
                 layers.Resizing(height=self.params.kid_image_size, width=self.params.kid_image_size),
                 layers.Lambda(keras.applications.inception_v3.preprocess_input),
@@ -130,8 +130,8 @@ def UpBlock(width, block_depth):
     return apply
 
 
-def get_network(image_size, widths, block_depth):
-    noisy_images = keras.Input(shape=(image_size, image_size, 3))
+def get_network(image_size: tuple, widths, block_depth):
+    noisy_images = keras.Input(shape=(image_size[0], image_size[1], 3))
     noise_variances = keras.Input(shape=(1, 1, 1))   # variance for both noise and real is 1
 
     e = layers.Lambda(sinusoidal_embedding)(noise_variances)
@@ -248,7 +248,7 @@ class DiffusionModel(keras.Model):
     def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0):
         # noise -> images -> denormalized images
         start_input_percent = 1.0 - start_noise_percent
-        rand_noise = tf.random.normal(shape=(num_images, self.params.image_size, self.params.image_size, 3)) # noise need to have normal distribution 
+        rand_noise = tf.random.normal(shape=(num_images, self.params.image_size[0], self.params.image_size[1], 3)) # noise need to have normal distribution 
         if input_images is not None:
             input_images = self.normalizer(input_images)
             initial_noise = start_input_percent**0.5*input_images + start_noise_percent**0.5*rand_noise
@@ -262,7 +262,7 @@ class DiffusionModel(keras.Model):
     def train_step(self, images):
         # normalize images to have standard deviation of 1
         images = self.normalizer(images, training=True)
-        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size, self.params.image_size, 3))
+        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size[0], self.params.image_size[1], 3))
 
         # sample uniform random diffusion times
         diffusion_times = tf.random.uniform(
@@ -296,7 +296,7 @@ class DiffusionModel(keras.Model):
     def test_step(self, images):
         # normalize images to have standard deviation of 1, like the noises
         images = self.normalizer(images, training=False)
-        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size, self.params.image_size, 3))
+        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size[0], self.params.image_size[1], 3))
 
         # sample uniform random diffusion times
         diffusion_times = tf.random.uniform(

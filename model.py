@@ -1,8 +1,8 @@
-from typing import List, Optional
+from typing import List, Tuple, Optional
 from pydantic import BaseModel
 
 
-class ModelParams(BaseModel):
+class ModelConfig(BaseModel):
     # KID = Kernel Inception Distance, used for validation step
     kid_image_size: Optional[int] = 75
     kid_diffusion_steps: Optional[int] = 5  
@@ -17,6 +17,6 @@ class ModelParams(BaseModel):
     block_depth: Optional[int] = 2
 
     # optimization
-    image_size: int = 128
+    image_size: Tuple[int, int] = (128, 128)
     batch_size: int = 32
     ema: Optional[float] = 0.999
