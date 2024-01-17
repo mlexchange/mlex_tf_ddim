@@ -1,5 +1,15 @@
 from typing import List, Tuple, Optional
-from pydantic import BaseModel
+from typing_extensions import Annotated
+
+from pydantic import BaseModel, ValidationError
+from pydantic.functional_validators import AfterValidator
+
+
+def check8(v: int):
+     assert v % 8 == 0, 'Element of image_size should be divided by 8!'
+     return v
+
+MyImageSize = Annotated[int, AfterValidator(check8)]
 
 
 class ModelConfig(BaseModel):
@@ -17,6 +27,6 @@ class ModelConfig(BaseModel):
     block_depth: Optional[int] = 2
 
     # optimization
-    image_size: Tuple[int, int] = (128, 128)
+    image_size: Tuple[MyImageSize, MyImageSize] = (128, 128)
     batch_size: int = 32
     ema: Optional[float] = 0.999
