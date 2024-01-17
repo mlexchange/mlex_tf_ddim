@@ -212,7 +212,7 @@ class DiffusionModel(keras.Model):
 
         return pred_noises, pred_images
 
-    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps):
+    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps, show_print=False):
         # reverse diffusion = sampling
         num_images = initial_noise.shape[0]
 
@@ -221,7 +221,8 @@ class DiffusionModel(keras.Model):
                                 (math.acos(self.params.min_signal_rate)-math.acos(self.params.max_signal_rate))
         
         scheduler_start_noise = max(min(scheduler_start_noise, 1.0), 0.0)
-        print(f'scheduler_start_noise level {scheduler_start_noise}')
+        if show_print:
+            print(f'scheduler_start_noise level {scheduler_start_noise}')
         step_size = scheduler_start_noise / diffusion_steps # seems like it doesnt matter if start_noise_percent**0.5
         
         next_noisy_images = initial_noise
@@ -246,16 +247,16 @@ class DiffusionModel(keras.Model):
 
         return pred_images
 
-    def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0):
+    def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0, show_print=False):
         # noise -> images -> denormalized images
         start_input_percent = 1.0 - start_noise_percent
         rand_noise = tf.random.normal(shape=(num_images, self.params.image_size[0], self.params.image_size[1], 3)) # noise need to have normal distribution 
         if input_images is not None:
             input_images = self.normalizer(input_images)
             initial_noise = start_input_percent**0.5*input_images + start_noise_percent**0.5*rand_noise
-            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps)
+            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps, show_print)
         else:
-            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps)
+            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps, show_print)
         
         return self.denormalize(generated_images)
     
@@ -348,11 +349,13 @@ class DiffusionModel(keras.Model):
         """
         
         steps = diffusion_steps if diffusion_steps is not None else self.params.plot_diffusion_steps
+        show_noise_level = True if input_images is not None else False
         generated_images = self.generate(
             num_images=num_images,
             diffusion_steps=steps,
             input_images = input_images,
-            start_noise_percent=start_noise_percent
+            start_noise_percent=start_noise_percent,
+            show_print = show_noise_level
         )
         if out_path is not None:
             for i in range(num_images):
