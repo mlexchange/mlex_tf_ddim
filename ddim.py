@@ -339,7 +339,7 @@ class DiffusionModel(keras.Model):
         """
             Generate and show images from the trained diffusion model.
             Args:
-                num_images, int:                number of images to generate, defualt=1
+                num_images, int:                number of images to generate, default=1
                 input_images, tensor/array:     the images to diffuse noise and denoise
                 start_noise_percent, float:     noise level [0.0, 1.0], defalt=0.0
                 color_mode, str:                'rgb' or 'grayscale' (default)
@@ -376,7 +376,7 @@ class DiffusionModel(keras.Model):
             Args: 
                 input_images, tensor/array:   If given, only plots the input_images. \
                                               Otherwise, generates num_rows*num_cols number of new images and plot these images.
-                num_rows, int:                number of rows to display the images, defualt=1
+                num_rows, int:                number of rows to display the images, default=1
                 num_cols, int:                number of columns to display the images, default=1
                 color_mode, str:              'rgb' or 'grayscale' (default)
                 output_dir, str:              If given, the generated images will be saved to the directory. 
@@ -386,7 +386,7 @@ class DiffusionModel(keras.Model):
         if input_images is not None:
             # input_images will be converted to 4-d tensor (N, W, H, C)
             generated_images = input_images if len(input_images.shape) == 4 else tf.expand_dims(input_images, axis=0)
-            assert input_images.shape[0] >= N, f'{N} images to plot, which is larger than the number of input images' 
+            assert generated_images.shape[0] >= N, f'{N} images to plot, which is larger than the number of input images' 
         
         else:
             generated_images = self.generate(
