@@ -6,8 +6,8 @@ from pydantic.functional_validators import AfterValidator
 
 
 def check8(v: int):
-     assert v % 8 == 0, 'Element of image_size should be divided by 8!'
-     return v
+    assert v % 8 == 0, 'Element of image_size should be divided by 8!'
+    return v
 
 MyImageSize = Annotated[int, AfterValidator(check8)]
 
