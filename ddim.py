@@ -164,6 +164,7 @@ class DiffusionModel(keras.Model):
         self.normalizer = layers.Normalization()
         self.network = get_network(self.params.image_size, self.params.widths, self.params.block_depth)
         self.ema_network = keras.models.clone_model(self.network)
+        self.generated_images = None
    
     def compile(self, **kwargs):
         super().compile(**kwargs)
@@ -211,7 +212,7 @@ class DiffusionModel(keras.Model):
 
         return pred_noises, pred_images
 
-    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps):
+    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps, show_print=False):
         # reverse diffusion = sampling
         num_images = initial_noise.shape[0]
 
@@ -220,7 +221,8 @@ class DiffusionModel(keras.Model):
                                 (math.acos(self.params.min_signal_rate)-math.acos(self.params.max_signal_rate))
         
         scheduler_start_noise = max(min(scheduler_start_noise, 1.0), 0.0)
-        print(f'scheduler_start_noise level {scheduler_start_noise}')
+        if show_print:
+            print(f'scheduler_start_noise level {scheduler_start_noise}')
         step_size = scheduler_start_noise / diffusion_steps # seems like it doesnt matter if start_noise_percent**0.5
         
         next_noisy_images = initial_noise
@@ -245,16 +247,16 @@ class DiffusionModel(keras.Model):
 
         return pred_images
 
-    def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0):
+    def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0, show_print=False):
         # noise -> images -> denormalized images
         start_input_percent = 1.0 - start_noise_percent
         rand_noise = tf.random.normal(shape=(num_images, self.params.image_size[0], self.params.image_size[1], 3)) # noise need to have normal distribution 
         if input_images is not None:
             input_images = self.normalizer(input_images)
             initial_noise = start_input_percent**0.5*input_images + start_noise_percent**0.5*rand_noise
-            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps)
+            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps, show_print)
         else:
-            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps)
+            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps, show_print)
         
         return self.denormalize(generated_images)
     
@@ -327,33 +329,65 @@ class DiffusionModel(keras.Model):
 
         return {m.name: m.result() for m in self.metrics}
 
-    def generate_images(self, num_images=1, n=0, input_images=None, start_noise_percent=0.0, out_path='.'):
+    def generate_images(self, 
+                        num_images=1, 
+                        input_images=None, 
+                        start_noise_percent=0.0,
+                        color_mode = 'grayscale', 
+                        out_path=None,
+                        diffusion_steps = None):
+        """
+            Generate and show images from the trained diffusion model.
+            Args:
+                num_images, int:                number of images to generate, default=1
+                input_images, tensor/array:     the images to diffuse noise and denoise
+                start_noise_percent, float:     noise level [0.0, 1.0], defalt=0.0
+                color_mode, str:                'rgb' or 'grayscale' (default)
+                out_path, str:                  If given, the generated images will be saved to the directory.
+                diffusion_steps, int:           if not given, the diffusion step defined in modelConfig will be used.
+
+        """
+        
+        steps = diffusion_steps if diffusion_steps is not None else self.params.plot_diffusion_steps
+        show_noise_level = True if input_images is not None else False
         generated_images = self.generate(
             num_images=num_images,
-            diffusion_steps=self.params.plot_diffusion_steps,
+            diffusion_steps=steps,
             input_images = input_images,
-            start_noise_percent=start_noise_percent
+            start_noise_percent=start_noise_percent,
+            show_print = show_noise_level
         )
-        for i in range(num_images):
-            im = tf.image.rgb_to_grayscale(generated_images[i])
-            self.show_images(input_images=tf.expand_dims(im, axis=0), color_mode='rgb')
-            tf.keras.utils.save_img(f'{out_path}/image_{i+n*num_images}_{round(start_noise_percent*100)}pcnt_noise.png', im)
+        if out_path is not None:
+            for i in range(num_images):
+                if color_mode == 'grayscale':
+                    im = tf.image.rgb_to_grayscale(generated_images[i])
+                self.show_images(input_images=im)
+                tf.keras.utils.save_img(f'{out_path}/image_{round(start_noise_percent*100)}pcnt_noise_{i}.png', im)
+    
     
     def show_images(self, 
-                         input_images=None, 
-                         epoch=None, 
-                         logs=None,
-                         color_mode='grayscale', # or 'rgb'  
-                         num_rows=1, 
-                         num_cols=1, 
-                         ouput_dir=None):
+                    input_images=None, 
+                    color_mode='grayscale', # or 'rgb'  
+                    num_rows=1, 
+                    num_cols=1, 
+                    out_path=None):
+        """ 
+            Plot (and/or save) the generated images. The number of input_images must be no smaller than num_rows*num_cols.
+            Args: 
+                input_images, tensor/array:   If given, only plots the input_images. \
+                                              Otherwise, generates num_rows*num_cols number of new images and plot these images.
+                num_rows, int:                number of rows to display the images, default=1
+                num_cols, int:                number of columns to display the images, default=1
+                color_mode, str:              'rgb' or 'grayscale' (default)
+                output_dir, str:              If given, the generated images will be saved to the directory. 
         """
-            Generate new images and plot these images if input_images not given.
-            Otherwise, it plots input_iamges only (the number of input_images must equal to num_rows*num_cols).
-        """
+        N = num_rows*num_cols
 
         if input_images is not None:
-            generated_images = input_images
+            # input_images will be converted to 4-d tensor (N, W, H, C)
+            generated_images = input_images if len(input_images.shape) == 4 else tf.expand_dims(input_images, axis=0)
+            assert generated_images.shape[0] >= N, f'{N} images to plot, which is larger than the number of input images' 
+        
         else:
             generated_images = self.generate(
                 num_images=num_rows * num_cols,
@@ -369,8 +403,8 @@ class DiffusionModel(keras.Model):
                 if color_mode == 'grayscale' and im.shape[-1] == 3: 
                     im = tf.image.rgb_to_grayscale(im)
                 
-                if ouput_dir is not None:
-                    tf.keras.utils.save_img(f'{ouput_dir}/image_{index}.png', im)
+                if out_path is not None:
+                    tf.keras.utils.save_img(f'{out_path}/image_{index}.png', im)
                 plt.imshow(im)
                 plt.axis("off")
         plt.tight_layout()
