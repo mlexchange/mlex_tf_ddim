@@ -14,3 +14,7 @@ Install Tensorflow with GPU support on Apple M1/M2, follow [https://github.com/d
 - added parameter schema and validations
 - support arbitrary image size ratio  
 - added saving options for training history and the generated images
+
+**Instructions:**  
+A notebook for training: [train.ipynb](https://github.com/mlexchange/mlex_tf_ddim/blob/main/train.ipynb)  
+A notebook for inferencing: [inference.ipynb](https://github.com/mlexchange/mlex_tf_ddim/blob/main/inference.ipynb)
