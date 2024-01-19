@@ -2,7 +2,15 @@
 This is a cookbook for training a Denoising Diffusion Implicit Model (DDIM) from scratch and inferencing new images from the trained weights. The diffusion model code (ddim.py) is adapted from an open-source Keras example [https://keras.io/examples/generative/ddim/](https://keras.io/examples/generative/ddim/). 
 
 
-**Software requirements:**  tensorflow, matplotlib, jupyter, numpy, pydantic  
+**Software requirements:**  
+```
+Python >= 3.10
+tensorflow >= 2.15.0
+pydantic >= 2.0.0
+matplotlib
+jupyter
+numpy
+``` 
 
 Install Tensorflow with GPU support on Apple M1/M2, follow [https://github.com/deganza/Install-TensorFlow-on-Mac-M1-GPU/blob/main/Install-TensorFlow-on-Mac-M1-GPU.ipynb](https://github.com/deganza/Install-TensorFlow-on-Mac-M1-GPU/blob/main/Install-TensorFlow-on-Mac-M1-GPU.ipynb)
 
