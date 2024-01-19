@@ -4,9 +4,7 @@ This is a cookbook for training a Denoising Diffusion Implicit Model (DDIM) from
 
 **Software requirements:**  
 ```
-Python >= 3.10
-tensorflow >= 2.15.0
-pydantic >= 2.0.0
+tensorflow 
 matplotlib
 jupyter
 numpy
