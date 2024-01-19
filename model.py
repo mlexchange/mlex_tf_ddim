@@ -1,4 +1,7 @@
 import os, math
+from typing import List, Tuple, Optional
+from dataclasses import dataclass, field
+
 import tensorflow as tf
 from tensorflow import keras
 from keras import layers
@@ -6,7 +9,47 @@ from keras import layers
 import numpy as np
 import matplotlib.pyplot as plt
 
+
 # Adapted from https://keras.io/examples/generative/ddim/
+
+@dataclass
+class ModelConfig:
+    # KID = Kernel Inception Distance, used for validation step
+    kid_image_size: int = 75
+    kid_diffusion_steps: Optional[int] = 5  
+    plot_diffusion_steps: Optional[int] = 10 #diffusion steps, also the denoise steps for prediction
+
+    # scheduler parameters
+    min_signal_rate: Optional[float] = 0.02
+    max_signal_rate: Optional[float] = 0.95
+
+    # block parameters
+    n: Optional[int] = 8 # buffer class var, do not change!
+    widths: Optional[List[int]] = field(default_factory=lambda: [32, 64, 96, 128])
+    block_depth: Optional[int] = 2
+
+    # optimization
+    image_size: Tuple[int, int] = (128, 128)
+    batch_size: int = 32
+    ema: Optional[float] = 0.999
+ 
+    # validate values
+    def checkn(self, v: int, n: int):
+        assert v % n == 0, f'Element of image_size should be divided by {n}!'
+        return v
+    
+    def __setattr__(self, name, value):
+        if name == 'widths':
+            self.n = 2**(len(value)-1)
+
+        if name == 'image_size':
+            image_size = [0]*len(value)
+            for i, v in enumerate(value):
+                image_size[i] = self.checkn(v, self.n)
+            value = tuple(image_size)
+                
+        self.__dict__[name] = value
+
 
 class KID(keras.metrics.Metric):
     def __init__(self, name, params, **kwargs):
