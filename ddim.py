@@ -1,60 +1,44 @@
-import os, math
-from typing import List, Tuple, Optional
-from dataclasses import dataclass, field
-
+import os,math
+import matplotlib.pyplot as plt
 import tensorflow as tf
+
 from tensorflow import keras
 from keras import layers
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 
-# Adapted from https://keras.io/examples/generative/ddim/
+image_size = 128
+kid_image_size = 75
+kid_diffusion_steps = 5 
 
-@dataclass
-class ModelConfig:
-    # KID = Kernel Inception Distance, used for validation step
-    kid_image_size: int = 75
-    kid_diffusion_steps: Optional[int] = 5  
-    plot_diffusion_steps: Optional[int] = 10 #diffusion steps, also the denoise steps for prediction
+plot_diffusion_steps = 50 
 
-    # scheduler parameters
-    min_signal_rate: Optional[float] = 0.02
-    max_signal_rate: Optional[float] = 0.95
+# sampling
+min_signal_rate = 0.01 
+max_signal_rate = 1.0
 
-    # block parameters
-    n: Optional[int] = 8 # buffer class var, do not change!
-    widths: Optional[List[int]] = field(default_factory=lambda: [32, 64, 96, 128])
-    block_depth: Optional[int] = 2
+# architecture
+embedding_dims = 32
+embedding_max_frequency = 1000.0
 
-    # optimization
-    image_size: Tuple[int, int] = (128, 128)
-    batch_size: int = 32
-    ema: Optional[float] = 0.999
- 
-    # validate values
-    def checkn(self, v: int, n: int):
-        assert v % n == 0, f'Element of image_size should be divided by {n}!'
-        return v
-    
-    def __setattr__(self, name, value):
-        if name == 'widths':
-            self.n = 2**(len(value)-1)
+# optimization
+batch_size = 1
+ema = 0.999
 
-        if name == 'image_size':
-            image_size = [0]*len(value)
-            for i, v in enumerate(value):
-                image_size[i] = self.checkn(v, self.n)
-            value = tuple(image_size)
-                
-        self.__dict__[name] = value
+
+# save generated images to disk
+save_img = True
+if save_img:
+    ouput_dir = 'ddim_output'
+    if not os.path.isdir(ouput_dir):
+        os.makedirs(ouput_dir)
 
 
 class KID(keras.metrics.Metric):
-    def __init__(self, name, params, **kwargs):
+    def __init__(self, name, **kwargs):
         super().__init__(name=name, **kwargs)
-        self.params = params
+
         # KID is estimated per batch and is averaged across batches
         self.kid_tracker = keras.metrics.Mean(name="kid_tracker")
 
@@ -63,13 +47,13 @@ class KID(keras.metrics.Metric):
         # preprocessing as during pretraining
         self.encoder = keras.Sequential(
             [
-                keras.Input(shape=(self.params.image_size[0], self.params.image_size[1], 3)),
+                keras.Input(shape=(image_size, image_size, 3)),
                 layers.Rescaling(255.0),
-                layers.Resizing(height=self.params.kid_image_size, width=self.params.kid_image_size),
+                layers.Resizing(height=kid_image_size, width=kid_image_size),
                 layers.Lambda(keras.applications.inception_v3.preprocess_input),
                 keras.applications.InceptionV3(
                     include_top=False,
-                    input_shape=(self.params.kid_image_size, self.params.kid_image_size, 3),
+                    input_shape=(kid_image_size, kid_image_size, 3),
                     weights="imagenet",
                 ),
                 layers.GlobalAveragePooling2D(),
@@ -114,8 +98,7 @@ class KID(keras.metrics.Metric):
         self.kid_tracker.reset_state()
 
 
-#------ ultility functions for building the NN blocks -------
-def sinusoidal_embedding(x, embedding_dims=32, embedding_max_frequency=1000.0):
+def sinusoidal_embedding(x):
     embedding_min_frequency = 1.0
     frequencies = tf.exp(
         tf.linspace(
@@ -173,8 +156,8 @@ def UpBlock(width, block_depth):
     return apply
 
 
-def get_network(image_size: tuple, widths, block_depth):
-    noisy_images = keras.Input(shape=(image_size[0], image_size[1], 3))
+def get_network(image_size, widths, block_depth):
+    noisy_images = keras.Input(shape=(image_size, image_size, 3))
     noise_variances = keras.Input(shape=(1, 1, 1))   # variance for both noise and real is 1
 
     e = layers.Lambda(sinusoidal_embedding)(noise_variances)
@@ -196,25 +179,24 @@ def get_network(image_size: tuple, widths, block_depth):
 
     x = layers.Conv2D(3, kernel_size=1, kernel_initializer="zeros")(x)
 
-    return keras.Model([noisy_images, noise_variances], x, name="residual_unet")  # return a NN as x, and [] as inputs
+    return keras.Model([noisy_images, noise_variances], x, name="residual_unet") 
 
 
-#------ Denoising diffusion implicit models ---------
+
 class DiffusionModel(keras.Model):
-    def __init__(self, params):
+    def __init__(self, image_size, widths, block_depth):
         super().__init__()
-        self.params = params
+
         self.normalizer = layers.Normalization()
-        self.network = get_network(self.params.image_size, self.params.widths, self.params.block_depth)
+        self.network = get_network(image_size, widths, block_depth)
         self.ema_network = keras.models.clone_model(self.network)
-        self.generated_images = None
-   
+
     def compile(self, **kwargs):
         super().compile(**kwargs)
 
         self.noise_loss_tracker = keras.metrics.Mean(name="n_loss") # average per batch
         self.image_loss_tracker = keras.metrics.Mean(name="i_loss") # average per batch
-        self.kid = KID("kid", self.params)
+        self.kid = KID(name="kid")
 
     @property
     def metrics(self):
@@ -227,17 +209,15 @@ class DiffusionModel(keras.Model):
 
     def diffusion_schedule(self, diffusion_times):
         # diffusion times -> angles
-        start_angle = tf.acos(self.params.max_signal_rate)
-        end_angle = tf.acos(self.params.min_signal_rate)
+        start_angle = tf.acos(max_signal_rate)
+        end_angle = tf.acos(min_signal_rate)
         
-        # diffusion times determine the noise level for each process; 
         diffusion_angles = start_angle + diffusion_times * (end_angle - start_angle)
 
         # angles -> signal and noise rates
         signal_rates = tf.cos(diffusion_angles)
-        noise_rates = tf.sin(diffusion_angles)  # when noise_level=0, almost 0
-        # note that their squared sum is always: sin^2(x) + cos^2(x) = 1
-
+        noise_rates = tf.sin(diffusion_angles)
+        
         return noise_rates, signal_rates
     
     #first train the denoiser, then test it 
@@ -248,31 +228,25 @@ class DiffusionModel(keras.Model):
         else:
             network = self.ema_network
 
-        # predict noise component and calculate the image component using it
-        pred_noises = network([noisy_images, noise_rates**2], training=training)  # noise, got from the trained U-Net 
-        # when nosie=0, there will be a little bit change
-        pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates   # equation 4 in DDIM paper
+        pred_noises = network([noisy_images, noise_rates**2], training=training)  
+        pred_images = (noisy_images - noise_rates * pred_noises) / signal_rates   
 
         return pred_noises, pred_images
 
-    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps, show_print=False):
+    def reverse_diffusion(self, initial_noise, start_input_percent, diffusion_steps):
         # reverse diffusion = sampling
         num_images = initial_noise.shape[0]
-
-        #step_size = start_noise_percent / diffusion_steps # seems like it doesnt matter if start_noise_percent**0.5
-        scheduler_start_noise = (math.acos(start_input_percent**0.5)-math.acos(self.params.max_signal_rate)) / \
-                                (math.acos(self.params.min_signal_rate)-math.acos(self.params.max_signal_rate))
-        
-        scheduler_start_noise = max(min(scheduler_start_noise, 1.0), 0.0)
-        if show_print:
-            print(f'scheduler_start_noise level {scheduler_start_noise}')
-        step_size = scheduler_start_noise / diffusion_steps # seems like it doesnt matter if start_noise_percent**0.5
+    
+        scheduler_start_noise = (tf.acos(start_input_percent**0.5)-tf.acos(max_signal_rate))/(tf.acos(min_signal_rate)-tf.acos(max_signal_rate))
+        scheduler_start_noise = min(scheduler_start_noise, 1.0)
+        scheduler_start_noise = max(scheduler_start_noise, 0.0)
+        print(f'scheduler_start_noise level {scheduler_start_noise}')
+        step_size = scheduler_start_noise / diffusion_steps 
         
         next_noisy_images = initial_noise
         for step in range(diffusion_steps):
             noisy_images = next_noisy_images
 
-            # separate the current noisy image to its components
             diffusion_times = tf.ones((num_images, 1, 1, 1))*scheduler_start_noise - step * step_size
             noise_rates, signal_rates = self.diffusion_schedule(diffusion_times)
             pred_noises, pred_images = self.denoise(
@@ -287,34 +261,38 @@ class DiffusionModel(keras.Model):
             next_noisy_images = (
                 next_signal_rates * pred_images + next_noise_rates * pred_noises
             )
+            # this new noisy image will be used in the next step
 
         return pred_images
 
-    def generate(self, num_images, diffusion_steps, input_images=None, start_noise_percent=0.0, show_print=False):
+    def generate(self, num_images, diffusion_steps, input_images=None, start_input_percent=1.0):
         # noise -> images -> denormalized images
-        start_input_percent = 1.0 - start_noise_percent
-        rand_noise = tf.random.normal(shape=(num_images, self.params.image_size[0], self.params.image_size[1], 3)) # noise need to have normal distribution 
+        rand_noise = tf.random.normal(shape=(num_images, image_size, image_size, 3)) # noise need to have normal distribution 
         if input_images is not None:
             input_images = self.normalizer(input_images)
-            initial_noise = start_input_percent**0.5*input_images + start_noise_percent**0.5*rand_noise
-            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps, show_print)
+            #print(f'input_images\n{input_images}')
+            initial_noise = start_input_percent**0.5*input_images + (1-start_input_percent)**0.5*rand_noise
+            generated_images = self.reverse_diffusion(initial_noise, start_input_percent, diffusion_steps)
         else:
-            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps, show_print)
+            generated_images = self.reverse_diffusion(rand_noise, 0.0, diffusion_steps)
+            
+        generated_images = self.denormalize(generated_images)
+        #print(f'generated_images\n{generated_images}')
         
-        return self.denormalize(generated_images)
+        return generated_images
     
-    @tf.function
+
     def train_step(self, images):
-        # normalize images to have standard deviation of 1
+        # normalize images to have standard deviation of 1, like the noises
         images = self.normalizer(images, training=True)
-        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size[0], self.params.image_size[1], 3))
+        noises = tf.random.normal(shape=(batch_size, image_size, image_size, 3))
 
         # sample uniform random diffusion times
         diffusion_times = tf.random.uniform(
-            shape=(self.params.batch_size, 1, 1, 1), minval=0.0, maxval=1.0
+            shape=(batch_size, 1, 1, 1), minval=0.0, maxval=1.0
         )
         noise_rates, signal_rates = self.diffusion_schedule(diffusion_times)
-        noisy_images = signal_rates * images + noise_rates * noises # equation 4 in ddim paper 
+        noisy_images = signal_rates * images + noise_rates * noises 
 
         with tf.GradientTape() as tape:
             # train the network to separate noisy images to their components
@@ -325,33 +303,29 @@ class DiffusionModel(keras.Model):
             noise_loss = self.loss(noises, pred_noises)  # used for training, evarge of bactch
             image_loss = self.loss(images, pred_images)  # only used as metric
 
-        gradients = tape.gradient(noise_loss, self.network.trainable_weights) # use noise loss for calculating the gradients
-        self.optimizer.apply_gradients(zip(gradients, self.network.trainable_weights)) # backpropagation 
+        gradients = tape.gradient(noise_loss, self.network.trainable_weights) 
+        self.optimizer.apply_gradients(zip(gradients, self.network.trainable_weights)) 
 
         self.noise_loss_tracker.update_state(noise_loss)
         self.image_loss_tracker.update_state(image_loss)
 
         # track the exponential moving averages of weights
         for weight, ema_weight in zip(self.network.weights, self.ema_network.weights):
-            ema_weight.assign(self.params.ema * ema_weight + (1 - self.params.ema) * weight)
+            ema_weight.assign(ema * ema_weight + (1 - ema) * weight)
 
         # KID is not measured during the training phase for computational efficiency
         return {m.name: m.result() for m in self.metrics[:-1]}
     
     def test_step(self, images):
-        # normalize images to have standard deviation of 1, like the noises
         images = self.normalizer(images, training=False)
-        noises = tf.random.normal(shape=(self.params.batch_size, self.params.image_size[0], self.params.image_size[1], 3))
+        noises = tf.random.normal(shape=(batch_size, image_size, image_size, 3))
 
-        # sample uniform random diffusion times
         diffusion_times = tf.random.uniform(
-            shape=(self.params.batch_size, 1, 1, 1), minval=0.0, maxval=1.0
+            shape=(batch_size, 1, 1, 1), minval=0.0, maxval=1.0
         )
         noise_rates, signal_rates = self.diffusion_schedule(diffusion_times)
-        # mix the images with noises accordingly
         noisy_images = signal_rates * images + noise_rates * noises
 
-        # use the network to separate noisy images to their components
         pred_noises, pred_images = self.denoise(
             noisy_images, noise_rates, signal_rates, training=False
         )
@@ -366,76 +340,53 @@ class DiffusionModel(keras.Model):
         # this is computationally demanding, kid_diffusion_steps has to be small!
         images = self.denormalize(images)
         generated_images = self.generate(
-            num_images=self.params.batch_size, diffusion_steps=self.params.kid_diffusion_steps
+            num_images=batch_size, diffusion_steps=kid_diffusion_steps
         )
         self.kid.update_state(images, generated_images)
 
         return {m.name: m.result() for m in self.metrics}
 
-    def generate_images(self, 
-                        num_images=1, 
-                        input_images=None, 
-                        start_noise_percent=0.0,
-                        color_mode = 'grayscale', 
-                        out_path=None,
-                        diffusion_steps = None):
-        """
-            Generate and show images from the trained diffusion model.
-            Args:
-                num_images, int:                number of images to generate, default=1
-                input_images, tensor/array:     the images to diffuse noise and denoise
-                start_noise_percent, float:     noise level [0.0, 1.0], defalt=0.0
-                color_mode, str:                'rgb' or 'grayscale' (default)
-                out_path, str:                  If given, the generated images will be saved to the directory.
-                diffusion_steps, int:           if not given, the diffusion step defined in modelConfig will be used.
-
-        """
-        
-        steps = diffusion_steps if diffusion_steps is not None else self.params.plot_diffusion_steps
-        show_noise_level = True if input_images is not None else False
+    def generate_images(self, num_images=100, n=0, input_images=None, noise_level=0.0, outname='out_image.png'):
+        start_input_percent = 1.0 - noise_level
         generated_images = self.generate(
             num_images=num_images,
-            diffusion_steps=steps,
+            diffusion_steps=plot_diffusion_steps,
             input_images = input_images,
-            start_noise_percent=start_noise_percent,
-            show_print = show_noise_level
+            start_input_percent=start_input_percent
         )
-        if out_path is not None:
-            for i in range(num_images):
-                if color_mode == 'grayscale':
-                    im = tf.image.rgb_to_grayscale(generated_images[i])
-                self.show_images(input_images=im)
-                tf.keras.utils.save_img(f'{out_path}/image_{round(start_noise_percent*100)}pcnt_noise_{i}.png', im)
+        for i in range(num_images):
+            im = tf.image.rgb_to_grayscale(generated_images[i])
+            tf.keras.utils.save_img(outname, im)
+            
     
     
-    def show_images(self, 
-                    input_images=None, 
-                    color_mode='grayscale', # or 'rgb'  
-                    num_rows=1, 
-                    num_cols=1, 
-                    out_path=None):
-        """ 
-            Plot (and/or save) the generated images. The number of input_images must be no smaller than num_rows*num_cols.
-            Args: 
-                input_images, tensor/array:   If given, only plots the input_images. \
-                                              Otherwise, generates num_rows*num_cols number of new images and plot these images.
-                num_rows, int:                number of rows to display the images, default=1
-                num_cols, int:                number of columns to display the images, default=1
-                color_mode, str:              'rgb' or 'grayscale' (default)
-                output_dir, str:              If given, the generated images will be saved to the directory. 
-        """
-        N = num_rows*num_cols
+    def plot_gray_images(self, input_images=None, epoch=None, logs=None, num_rows=1, num_cols=1):
+        generated_images = self.generate(
+            input_images =input_images,
+            num_images=num_rows * num_cols,
+            diffusion_steps=plot_diffusion_steps,
+        )
 
-        if input_images is not None:
-            # input_images will be converted to 4-d tensor (N, W, H, C)
-            generated_images = input_images if len(input_images.shape) == 4 else tf.expand_dims(input_images, axis=0)
-            assert generated_images.shape[0] >= N, f'{N} images to plot, which is larger than the number of input images' 
+        plt.figure(figsize=(num_cols * 2.0, num_rows * 2.0))
+        for row in range(num_rows):
+            for col in range(num_cols):
+                index = row * num_cols + col
+                plt.subplot(num_rows, num_cols, index + 1)
+                im = tf.image.rgb_to_grayscale(generated_images[index])
+                if save_img:
+                    tf.keras.utils.save_img(f'{ouput_dir}/ddim_{index}.png', im)
+                plt.imshow(im)
+                plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+        plt.close()
         
-        else:
-            generated_images = self.generate(
-                num_images=num_rows * num_cols,
-                diffusion_steps=self.params.plot_diffusion_steps,
-            )
+    def plot_rgb_images(self, input_images=None, epoch=None, logs=None, num_rows=1, num_cols=1):
+        generated_images = self.generate(
+            input_images =input_images,
+            num_images=num_rows * num_cols,
+            diffusion_steps=plot_diffusion_steps,
+        )
 
         plt.figure(figsize=(num_cols * 2.0, num_rows * 2.0))
         for row in range(num_rows):
@@ -443,13 +394,11 @@ class DiffusionModel(keras.Model):
                 index = row * num_cols + col
                 plt.subplot(num_rows, num_cols, index + 1)
                 im = generated_images[index]
-                if color_mode == 'grayscale' and im.shape[-1] == 3: 
-                    im = tf.image.rgb_to_grayscale(im)
-                
-                if out_path is not None:
-                    tf.keras.utils.save_img(f'{out_path}/image_{index}.png', im)
-                plt.imshow(im)
+                plt.imshow(im, cmap='jet')
                 plt.axis("off")
+                if save_img:
+                    tf.keras.utils.save_img(f'{ouput_dir}/ddim_{index}.png', im)
+                    
         plt.tight_layout()
         plt.show()
         plt.close()
